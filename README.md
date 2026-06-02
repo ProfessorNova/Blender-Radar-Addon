@@ -23,8 +23,59 @@ an operator and a property group. See the roadmap below for the full plan.
 
 ## Development
 
-Recommended: VS Code with the "Blender Development" extension for hot reload
-and debugging.
+### VS Code with the Blender Development extension
+
+The recommended setup is VS Code with the
+[Blender Development](https://marketplace.visualstudio.com/items?itemName=JacquesLucke.blender-development)
+extension by Jacques Lucke. It provides hot reload, an integrated debugger,
+and a one-command start workflow.
+
+**One-time setup**
+
+1. Install the extension from the VS Code marketplace (`JacquesLucke.blender-development`).
+2. Open the repository folder in VS Code.
+3. Run the command palette entry **Blender: Start** (`Ctrl+Shift+P` →
+   `Blender: Start`). On the first run it will ask for the path to the
+   Blender executable (e.g. `C:\Program Files\Blender Foundation\Blender 5.0\blender.exe`).
+   The path is saved in your VS Code user settings and is not committed to the
+   repository.
+
+**Daily workflow**
+
+| Action | Command |
+|--------|---------|
+| Launch Blender | **Blender: Start** |
+| Reload the add-on after a code change | **Blender: Reload Addons** |
+| Stop Blender | **Blender: Stop** |
+
+After **Blender: Start** the add-on is automatically installed into the
+running Blender instance. You do not need to create a ZIP or touch
+Edit > Preferences. Every time you save a `.py` file and run
+**Blender: Reload Addons**, Blender re-imports the changed modules without
+restarting.
+
+**Debugging**
+
+The extension launches Blender with `debugpy` attached. To hit a breakpoint:
+
+1. Set a breakpoint in VS Code (click in the gutter or press `F9`).
+2. Run **Blender: Start** (or **Blender: Reload Addons** if already running).
+3. Trigger the code path in Blender (e.g. click *Compute Range-Doppler Map*
+   in the N-panel under the **Radar** tab).
+4. VS Code pauses at the breakpoint with the full call stack and locals panel.
+
+**Packaging a ZIP (optional)**
+
+To create an installable `.zip` for distribution or manual installation:
+
+    # Windows PowerShell
+    Compress-Archive -Path .\* -DestinationPath radar_rdm_generator.zip `
+        -CompressionLevel Optimal
+
+Or use the command palette entry **Blender: Build and Install** which packages
+and installs in one step.
+
+### Running tests without Blender
 
 Blender-independent logic lives in `core/` and must not import `bpy`. This
 keeps the numerical code testable outside Blender and reusable in a plain
