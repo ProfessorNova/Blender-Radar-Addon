@@ -1,0 +1,11 @@
+schema_version = "1.0.0"
+
+id = "radar_addon"
+version = "0.1.0"
+name = "Radar Addon"
+tagline = "Raytracing-based radar simulation"
+maintainer = "Florian Wieland <mail@florianwieland.de>"
+type = "add-on"
+license = ["SPDX:GPL-3.0-or-later"]
+blender_version_min = "5.0.0"
+tags = ["Object", "Render", "Development"]
