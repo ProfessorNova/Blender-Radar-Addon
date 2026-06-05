@@ -1,7 +1,8 @@
 """Radar UI panels.
 
-Milestone 0 provides a single panel in the 3D viewport N-panel under a
-"Radar" tab. It shows the placeholder property and the compute button.
+The main panel lives in the 3D viewport N-panel under a "Radar" tab. From
+milestone 1 it exposes the radar object and the ray fan settings and a button
+to extract scatter points for the current frame.
 """
 
 import bpy
@@ -21,10 +22,20 @@ class RADAR_PT_main(Panel):
         layout = self.layout
         settings = context.scene.radar_settings
 
-        col = layout.column(align=True)
+        col = layout.column()
+        col.prop(settings, "radar_object")
         col.prop(settings, "max_range")
 
+        box = layout.box()
+        box.label(text="Ray Fan")
+        box.prop(settings, "fov_azimuth")
+        box.prop(settings, "fov_elevation")
+        box.prop(settings, "rays_azimuth")
+        box.prop(settings, "rays_elevation")
+        box.prop(settings, "velocity_dframes")
+
         layout.separator()
+        layout.operator("radar.extract_scatter_points", icon="TRACKER")
         layout.operator("radar.compute_rdm", icon="PLAY")
 
 

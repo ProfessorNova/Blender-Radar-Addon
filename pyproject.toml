@@ -1,0 +1,11 @@
+[tool.pytest.ini_options]
+# The repository root doubles as the Blender add-on package (it holds the
+# extension entry point __init__.py). The importlib import mode keeps pytest
+# from manipulating sys.path via that package, and pythonpath makes the
+# bpy-independent "core" package importable from the tests.
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
+testpaths = ["tests"]
+# Never descend into the bpy-dependent packages; they cannot import outside
+# Blender and hold no tests.
+norecursedirs = ["operators", "panels", "properties", "utils", ".venv", ".git"]

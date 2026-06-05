@@ -5,8 +5,9 @@ raytracing.
 
 ## Status
 
-Milestone 0 complete: project skeleton. A runnable, empty add-on with a panel,
-an operator and a property group. See the roadmap below for the full plan.
+Milestone 1 complete: scene access and raytracing. The add-on casts a fan of
+rays from a chosen radar object and extracts scatter points with range and
+radial velocity for the current frame. See the roadmap below for the full plan.
 
 ## Requirements
 
@@ -102,8 +103,8 @@ previous one and yields a testable state.
 
 | MS | Title | Outcome |
 |----|-------|---------|
-| 0 | Skeleton and toolchain | Runnable, empty add-on |
-| 1 | Scene access and raytracing | Scatter points with range and radial velocity |
+| 0 | Skeleton and toolchain | Runnable, empty add-on (done) |
+| 1 | Scene access and raytracing | Scatter points with range and radial velocity (done) |
 | 2 | Signal model and first RDM | Plausible Range-Doppler map |
 | 3 | Configuration, noise and export | Reproducible dataset with ground truth |
 | 4 | Antenna array and angle information | Correct angle estimation, ADM and RAM |
@@ -136,13 +137,22 @@ panel.
 
 Goal: extract the geometric raw data from the scene.
 
-- [ ] Read geometry and transforms (`utils/scene_access.py`)
-- [ ] Ray cast against the scene via `scene.ray_cast()` (`core/raytracing.py`)
-- [ ] Radar object with position and viewing direction
-- [ ] Radial velocity of hit points from positional difference across frames
+- [x] Read geometry and transforms (`utils/scene_access.py`)
+- [x] Ray cast against the scene via `scene.ray_cast()` (wrapped for the
+      bpy-independent core in `core/raytracing.py`)
+- [x] Radar object with position and viewing direction
+- [x] Radial velocity of hit points from positional difference across frames
 
 Acceptance: a list of scatter points with range and radial velocity for a
 given frame.
+
+The bpy-independent raytracing math (ray-fan generation, range, rigid-body
+radial velocity, scatter-point extraction) lives in `core/raytracing.py` and
+is fully unit tested. `utils/scene_access.py` wraps `scene.ray_cast` and the
+frame stepping needed to sample velocities, and ties both together. In the
+viewport N-panel, pick a **Radar Object** (its local -Z axis is the boresight,
+matching the camera convention), set the ray fan, and press **Extract Scatter
+Points** to report the hits for the current frame.
 
 ### Milestone 2 - Signal model and first Range-Doppler map
 
