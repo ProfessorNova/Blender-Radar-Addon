@@ -37,9 +37,25 @@ and a one-command start workflow.
 2. Open the repository folder in VS Code.
 3. Run the command palette entry **Blender: Start** (`Ctrl+Shift+P` →
    `Blender: Start`). On the first run it will ask for the path to the
-   Blender executable (e.g. `C:\Program Files\Blender Foundation\Blender 5.0\blender.exe`).
+   Blender executable (e.g. `C:\Program Files\Blender Foundation\Blender 5.1\blender.exe`).
    The path is saved in your VS Code user settings and is not committed to the
    repository.
+
+   If VS Code cannot find Blender automatically, create a file
+   `.vscode/settings.json` in the project root with the path for your machine:
+
+   ```json
+   {
+       "blender.executables": [
+           {
+               "path": "C:\\Program Files\\Blender Foundation\\Blender 5.1\\blender.exe"
+           }
+       ]
+   }
+   ```
+
+   Adjust the version number to match your local Blender installation.
+   `.vscode/` is listed in `.gitignore`, so this file is never committed.
 
 **Daily workflow**
 
