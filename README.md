@@ -5,9 +5,12 @@ raytracing.
 
 ## Status
 
-Milestone 1 complete: scene access and raytracing. The add-on casts a fan of
-rays from a chosen radar object and extracts scatter points with range and
-radial velocity for the current frame. See the roadmap below for the full plan.
+Milestones 1-3 complete. On top of the raytracing, the add-on synthesizes an
+FMCW beat signal from the scatter points and produces a Range-Doppler map (RDM)
+via a 2D FFT, written to a Blender image data-block. The detection-volume
+overlay, the in-panel RDM preview and the Image-Editor viewing all work, and a
+modal renderer turns the whole scene frame range into a PNG image sequence.
+See the roadmap below for the full plan.
 
 ## Requirements
 
@@ -109,7 +112,16 @@ Python pipeline. Tests run without Blender:
         panels/                  # UI panels
         properties/              # PropertyGroups for radar configuration
         core/                    # Blender-independent signal processing
-        utils/                   # scene access and math helpers
+            raytracing.py        #   ray fan, range and radial velocity (MS1)
+            signal_model.py      #   FMCW config and beat-cube synthesis (MS2)
+            range_doppler.py     #   2D FFT, RDM, range axis, peak finder (MS2)
+            doppler.py           #   Doppler/velocity conversions, axis (MS2)
+        utils/                   # scene access and Blender-side bridges
+            scene_access.py      #   scene.ray_cast wrapper, motion sampling
+            rdm.py               #   scene -> RDM -> image bridge (MS2)
+            preview.py           #   in-panel RDM preview collection (MS3)
+            overlay.py           #   viewport detection-volume overlay (MS3)
+            animation.py         #   per-frame PNG-sequence save (MS3)
         tests/                   # tests for the Blender-independent core
 
 ## Roadmap
@@ -121,20 +133,23 @@ previous one and yields a testable state.
 |----|-------|---------|
 | 0 | Skeleton and toolchain | Runnable, empty add-on (done) |
 | 1 | Scene access and raytracing | Scatter points with range and radial velocity (done) |
-| 2 | Signal model and first RDM | Plausible Range-Doppler map |
-| 3 | Configuration, noise and export | Reproducible dataset with ground truth |
-| 4 | Antenna array and angle information | Correct angle estimation, ADM and RAM |
-| 5 | Detection and micro-Doppler | CFAR detections and micro-Doppler spectrogram |
-| 6 | Adversarial module and plausibilization | Physically back-projected perturbation |
-| 7 | Evaluation and robustness analysis | Reproducible evaluation |
+| 2 | Signal model and first RDM | Plausible Range-Doppler map (done) |
+| 3 | Visualization and animation | Overlay, in-panel/Image-Editor viewing, RDM image sequence |
+| 4 | Configuration, noise and export | Reproducible dataset with ground truth |
+| 5 | Antenna array and angle information | Correct angle estimation, ADM and RAM |
+| 6 | Detection and micro-Doppler | CFAR detections and micro-Doppler spectrogram |
+| 7 | Adversarial module and plausibilization | Physically back-projected perturbation |
+| 8 | Evaluation and robustness analysis | Reproducible evaluation |
 
 ### Dependencies between milestones
 
-- MS 0 to 3 form the indispensable base and are done sequentially.
-- MS 4 and 5 are largely independent and may be swapped. MS 5 is the more
+- MS 0 to 2 and MS 4 form the indispensable base and are done sequentially.
+- MS 3 (visualization and animation) is an optional convenience step on top of
+  MS 2 and is not required by any later milestone.
+- MS 5 and 6 are largely independent and may be swapped. MS 6 is the more
   important one for the research goal.
-- MS 6 and 7 require at least the base up to MS 3 and benefit strongly from
-  the detection feature from MS 5.
+- MS 7 and 8 require at least the base up to MS 4 and benefit strongly from
+  the detection feature from MS 6.
 
 ### Milestone 0 - Skeleton and toolchain
 
@@ -174,16 +189,87 @@ Points** to report the hits for the current frame.
 
 Goal: the first complete RDM.
 
-- [ ] Signal model with FMCW chirp and the radar equation (`core/signal_model.py`)
-- [ ] Build the data cube in the dimensions sample and chirp
-- [ ] Two-dimensional FFT for RDM generation (`core/range_doppler.py`)
-- [ ] Doppler evaluation (`core/doppler.py`)
-- [ ] Simple RDM visualization in Blender (image data-block)
+- [x] Signal model with FMCW chirp and the radar equation (`core/signal_model.py`)
+- [x] Build the data cube in the dimensions sample and chirp
+- [x] Two-dimensional FFT for RDM generation (`core/range_doppler.py`)
+- [x] Doppler evaluation (`core/doppler.py`)
+- [x] Simple RDM visualization in Blender (image data-block)
 
 Acceptance: a plausible RDM for a scene with a few moving objects, targets
 appear at the expected range and Doppler positions.
 
-### Milestone 3 - Configuration, noise and export
+The scatter points from milestone 1 are turned into point targets and fed
+through a dechirped FMCW model. `core/signal_model.py` defines `RadarConfig`
+(carrier frequency, bandwidth, sample rate, samples per chirp, chirps per
+frame, chirp period) with the derived quantities (range/velocity resolution
+and the unambiguous range/velocity spans) and synthesizes the complex beat
+data cube of shape `(chirps, samples)`. Each target's amplitude follows the
+radar equation (voltage ∝ 1/R²) weighted by the cosine of the surface
+incidence angle as a simple RCS proxy.
+
+`core/range_doppler.py` applies an optional window (Hann by default) and the
+2D FFT — a range FFT along the samples and a Doppler FFT along the chirps —
+and exposes the range axis and a peak finder. `core/doppler.py` owns the
+velocity axis and the Doppler/velocity conversions. All of this is
+bpy-independent and unit tested: a synthesized target is verified to land at
+the expected range and velocity cell, with the sign convention that a receding
+target (positive radial velocity) appears at a positive velocity bin.
+
+The Blender bridge lives in `utils/rdm.py`. In the viewport N-panel, set the
+**Signal Model** parameters (the panel shows the resulting resolutions and
+unambiguous spans live) and press **Compute Range-Doppler Map**. The RDM is
+written to an image data-block named `RadarRDM` (range on the vertical axis,
+velocity / Doppler on the horizontal axis, magnitude in dB normalised over an
+80 dB dynamic range). The operator reports the strongest target's range and
+velocity. The richer in-panel and Image-Editor viewing is part of milestone 3.
+
+Note: keep the ray-fan **Max Range** at or below the waveform's unambiguous
+**Max range** shown in the panel, otherwise distant hits alias into lower
+range bins.
+
+### Milestone 3 - Visualization and animation
+
+Goal: make the radar easy to set up and inspect, and extend the single-frame
+RDM to whole animations.
+
+- [x] Detection-volume viewport overlay (`utils/overlay.py`): a wireframe
+      frustum (corner rays, boresight, the rectangle at max range and a
+      cross-hair), like a spotlight's cone, showing the field of view and range
+      while posing the radar object
+- [x] In-panel RDM preview (`utils/preview.py`): panels cannot draw a raw
+      image, so a preview collection is rebuilt from the RDM pixels and drawn
+      with `template_icon`, making the result visible in the sidebar
+- [x] Native image data-block widget (`template_ID`) bound to the `RadarRDM`
+      image plus a **View in Image Editor** button that reuses an open Image
+      Editor or opens a new window
+- [x] Animation rendering: an operator that iterates the scene frame range and
+      computes an RDM per frame, with the ergonomics of *Render Animation*
+- [x] Progress feedback in the UI (a modal, cancelable operator with a progress
+      bar) so long sequences stay responsive
+- [x] Write each frame to an image sequence that plays back in a video player
+      or Blender's Image Editor, reusing the single-frame pipeline in
+      `utils/rdm.py`
+
+Acceptance: the detection volume and the RDM are visible without leaving the
+viewport, and a single button renders the RDM across the frame range, shows
+progress while running, and yields an image sequence that plays back as a video
+in which targets move in range and Doppler over time.
+
+The **Animation** section of the panel sets the output folder and shows the
+scene frame range that will be rendered. **Render RDM Animation** is a modal
+operator (`utils/animation.py`): it steps through `frame_start`..`frame_end`
+with `frame_step`, runs the single-frame pipeline (`compute_scene_rdm`) per
+frame, writes a PNG sequence (`rdm_0001.png`, `rdm_0002.png`, ...) and shows a
+progress bar in the status bar plus the current frame in the header; pressing
+**Esc** cancels and keeps the frames written so far. The sequence plays back as
+an image sequence in Blender's Image Editor or in external viewers, and can be
+encoded to a movie with any external tool if needed.
+
+Note: the rendered image sequence here is a convenience visualization, whereas
+the scientific data export (raw data cube and ground truth) is owned by
+milestone 4.
+
+### Milestone 4 - Configuration, noise and export
 
 Goal: make the results usable for downstream work.
 
@@ -195,7 +281,7 @@ Goal: make the results usable for downstream work.
 Acceptance: a reproducible dataset of RDM and matching ground truth, loadable
 outside Blender. The base is complete at this point.
 
-### Milestone 4 - Antenna array and angle information
+### Milestone 5 - Antenna array and angle information
 
 Goal: extend the model by the spatial dimension.
 
@@ -207,7 +293,7 @@ Goal: extend the model by the spatial dimension.
 Acceptance: correct angle estimation for a target with a known angle of
 arrival.
 
-### Milestone 5 - Detection and micro-Doppler
+### Milestone 6 - Detection and micro-Doppler
 
 Goal: advanced evaluations that double as assessment tools for the later
 attack.
@@ -218,7 +304,7 @@ attack.
 Acceptance: extracted detections from the RDM and a recognizable micro-Doppler
 pattern for a rotating or vibrating structure.
 
-### Milestone 6 - Adversarial module and physical plausibilization
+### Milestone 7 - Adversarial module and physical plausibilization
 
 Goal: the core of the research project, built on the complete pipeline.
 
@@ -234,7 +320,7 @@ the quantified discrepancy from the ideally optimized digital perturbation.
 Note: this milestone deliberately ends at simulation and physical
 plausibilization, not at a real transmit instruction.
 
-### Milestone 7 - Evaluation and robustness analysis
+### Milestone 8 - Evaluation and robustness analysis
 
 Goal: the scientific evaluation.
 

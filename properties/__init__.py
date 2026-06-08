@@ -1,18 +1,25 @@
 """Scene-level radar properties.
 
 Milestone 1 adds the inputs needed for scene access and raytracing: the
-radar object and the ray fan (field of view and ray counts). The full radar
-parameter set (carrier frequency, bandwidth, PRF, chirp configuration) is
-added in milestone 3.
+radar object and the ray fan (field of view and ray counts). Milestone 2 adds
+the FMCW waveform parameters needed to build the Range-Doppler map (carrier
+frequency, bandwidth, sample rate, chirp counts and the FFT window). The full
+configurable parameter set together with noise and export lands in milestone 3.
+
+Waveform values are stored in human-friendly units (GHz, MHz, MSPS, us) and
+converted to SI when a :class:`core.signal_model.RadarConfig` is built in
+``utils/rdm.py``.
 """
 
 import math
 
 import bpy
 from bpy.props import (
+    EnumProperty,
     FloatProperty,
     IntProperty,
     PointerProperty,
+    StringProperty,
 )
 from bpy.types import PropertyGroup
 
@@ -90,6 +97,96 @@ class RadarSettings(PropertyGroup):
         default=1,
         min=1,
         soft_max=10,
+    )
+
+    # --- FMCW waveform (milestone 2) ---------------------------------------
+    # Stored in convenient units; converted to SI in utils/rdm.py.
+
+    carrier_freq_ghz: FloatProperty(
+        name="Carrier Frequency",
+        description="FMCW carrier (centre) frequency in GHz",
+        default=77.0,
+        min=1.0,
+        soft_max=300.0,
+    )
+
+    bandwidth_mhz: FloatProperty(
+        name="Bandwidth",
+        description=(
+            "Swept bandwidth in MHz. Sets the range resolution "
+            "(c / (2 * bandwidth))"
+        ),
+        default=250.0,
+        min=1.0,
+        soft_max=5000.0,
+    )
+
+    sample_rate_msps: FloatProperty(
+        name="Sample Rate",
+        description="Fast-time ADC sample rate in mega-samples per second",
+        default=10.0,
+        min=0.1,
+        soft_max=100.0,
+    )
+
+    n_samples: IntProperty(
+        name="Samples / Chirp",
+        description="Fast-time samples per chirp (number of range bins)",
+        default=256,
+        min=8,
+        soft_max=2048,
+    )
+
+    n_chirps: IntProperty(
+        name="Chirps / Frame",
+        description="Slow-time chirps per frame (number of Doppler bins)",
+        default=64,
+        min=8,
+        soft_max=1024,
+    )
+
+    chirp_period_us: FloatProperty(
+        name="Chirp Period",
+        description=(
+            "Slow-time spacing between chirps in microseconds. Must be at "
+            "least the active chirp duration (samples / sample rate)"
+        ),
+        default=30.0,
+        min=0.1,
+        soft_max=1000.0,
+    )
+
+    rdm_window: EnumProperty(
+        name="FFT Window",
+        description="Window applied before the range and Doppler FFTs",
+        items=(
+            ("none", "None", "No window (rectangular)"),
+            ("hann", "Hann", "Hann window (good general default)"),
+            ("hamming", "Hamming", "Hamming window"),
+            ("blackman", "Blackman", "Blackman window (low sidelobes)"),
+        ),
+        default="hann",
+    )
+
+    rdm_image: PointerProperty(
+        name="RDM Image",
+        description=(
+            "Image data-block holding the most recent Range-Doppler map. Set "
+            "automatically by Compute Range-Doppler Map"
+        ),
+        type=bpy.types.Image,
+    )
+
+    # --- Animation rendering (milestone 3) ---------------------------------
+
+    anim_output_dir: StringProperty(
+        name="Output Folder",
+        description=(
+            "Folder for the rendered Range-Doppler PNG sequence (rdm_0001.png, "
+            "...). '//' is relative to the saved .blend file"
+        ),
+        default="//rdm_render/",
+        subtype="DIR_PATH",
     )
 
 

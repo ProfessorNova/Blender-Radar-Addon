@@ -24,9 +24,9 @@ def _ordered_modules():
     bpy available.
     """
     from . import operators, panels, properties
-    from .utils import overlay
+    from .utils import overlay, preview
 
-    return (properties, operators, panels, overlay)
+    return (properties, preview, operators, panels, overlay)
 
 
 def register():

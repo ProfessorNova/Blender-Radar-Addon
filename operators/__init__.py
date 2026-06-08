@@ -2,13 +2,26 @@
 
 Milestone 1 adds :class:`RADAR_OT_extract_scatter_points`, which casts a fan
 of rays from the radar object and reports the resulting scatter points (range
-and radial velocity) for the current frame. The Range-Doppler computation
-operator remains a placeholder until milestone 2.
+and radial velocity) for the current frame. Milestone 2 implements
+:class:`RADAR_OT_compute_rdm`, which builds the Range-Doppler map from those
+scatter points and writes it to a Blender image. Milestone 3 adds
+:class:`RADAR_OT_view_rdm` and the modal
+:class:`RADAR_OT_render_animation`, which renders an RDM per frame across the
+scene frame range with a progress bar and optional movie encoding.
 """
+
+import os
 
 import bpy
 from bpy.types import Operator
 
+from ..utils.animation import frame_filename, save_image_png
+from ..utils.rdm import (
+    RDM_IMAGE_NAME,
+    build_radar_config,
+    compute_scene_rdm,
+    show_image_in_editor,
+)
 from ..utils.scene_access import extract_scene_scatter_points
 
 
@@ -73,25 +86,232 @@ class RADAR_OT_extract_scatter_points(Operator):
 
 
 class RADAR_OT_compute_rdm(Operator):
-    """Placeholder operator for the Range-Doppler computation."""
+    """Build the Range-Doppler map for the current frame and write an image."""
 
     bl_idname = "radar.compute_rdm"
     bl_label = "Compute Range-Doppler Map"
-    bl_description = "Placeholder. Real computation is added in milestone 2"
+    bl_description = (
+        "Cast rays from the radar object, synthesize the FMCW beat signal and "
+        f"write the Range-Doppler map to the '{RDM_IMAGE_NAME}' image"
+    )
     bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.radar_settings.radar_object is not None
 
     def execute(self, context):
         settings = context.scene.radar_settings
-        # Report so the user sees the wiring works end to end.
+        if settings.radar_object is None:
+            self.report({"ERROR"}, "No radar object selected")
+            return {"CANCELLED"}
+
+        try:
+            result = compute_scene_rdm(context, settings)
+        except ValueError as exc:
+            self.report({"ERROR"}, f"Invalid radar configuration: {exc}")
+            return {"CANCELLED"}
+
+        # Expose the image data-block so the panel's image widget can show it.
+        settings.rdm_image = result.image
+
+        if result.n_points == 0:
+            self.report(
+                {"WARNING"},
+                "No scatter points: rays did not hit geometry within max "
+                f"range. Empty '{RDM_IMAGE_NAME}' image written.",
+            )
+            return {"FINISHED"}
+
+        show_image_in_editor(result.image)
+        # Redraw the N-panel so the embedded RDM preview updates immediately.
+        for area in context.screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()
+
         self.report(
             {"INFO"},
-            "Radar add-on active. Max range set to "
-            f"{settings.max_range:.1f} m. Compute not yet implemented.",
+            f"RDM from {result.n_points} points written to "
+            f"'{RDM_IMAGE_NAME}' | strongest target r={result.peak_range:.2f} m "
+            f"v={result.peak_velocity:+.2f} m/s",
         )
         return {"FINISHED"}
 
 
-_classes = (RADAR_OT_extract_scatter_points, RADAR_OT_compute_rdm)
+class RADAR_OT_view_rdm(Operator):
+    """Open the Range-Doppler image in an Image Editor."""
+
+    bl_idname = "radar.view_rdm"
+    bl_label = "View in Image Editor"
+    bl_description = (
+        "Show the Range-Doppler image in an Image Editor, opening a new window "
+        "if none is available"
+    )
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        return bpy.data.images.get(RDM_IMAGE_NAME) is not None
+
+    def execute(self, context):
+        image = bpy.data.images.get(RDM_IMAGE_NAME)
+        if image is None:
+            self.report({"WARNING"}, "No Range-Doppler map computed yet")
+            return {"CANCELLED"}
+
+        # Prefer an Image Editor that is already open.
+        if show_image_in_editor(image):
+            return {"FINISHED"}
+
+        # Otherwise duplicate the current area into a new window and switch it
+        # to an Image Editor showing the map.
+        try:
+            bpy.ops.wm.window_new()
+            area = context.window_manager.windows[-1].screen.areas[0]
+            area.type = "IMAGE_EDITOR"
+            area.spaces.active.image = image
+        except (RuntimeError, AttributeError):
+            self.report(
+                {"WARNING"},
+                f"Open an Image Editor and pick the '{RDM_IMAGE_NAME}' image",
+            )
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class RADAR_OT_render_animation(Operator):
+    """Render a Range-Doppler map for every frame of the scene range."""
+
+    bl_idname = "radar.render_animation"
+    bl_label = "Render RDM Animation"
+    bl_description = (
+        "Compute a Range-Doppler map for each frame of the scene range and "
+        "write a PNG sequence to the output folder. Press Esc to cancel"
+    )
+    bl_options = {"REGISTER"}
+
+    _timer = None
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.radar_settings.radar_object is not None
+
+    def invoke(self, context, event):
+        scene = context.scene
+        settings = scene.radar_settings
+
+        # Fail fast on an inconsistent waveform before touching the timeline.
+        try:
+            build_radar_config(settings)
+        except ValueError as exc:
+            self.report({"ERROR"}, f"Invalid radar configuration: {exc}")
+            return {"CANCELLED"}
+
+        out_dir = bpy.path.abspath(settings.anim_output_dir)
+        if not out_dir or not os.path.isabs(out_dir):
+            self.report(
+                {"ERROR"},
+                "Save the .blend file or set an absolute output folder first",
+            )
+            return {"CANCELLED"}
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+        except OSError as exc:
+            self.report({"ERROR"}, f"Cannot create output folder: {exc}")
+            return {"CANCELLED"}
+
+        step = max(scene.frame_step, 1)
+        self._frames = list(range(scene.frame_start, scene.frame_end + 1, step))
+        if not self._frames:
+            self.report({"WARNING"}, "Empty frame range")
+            return {"CANCELLED"}
+
+        self._out_dir = out_dir
+        self._index = 0
+        self._orig_frame = scene.frame_current
+        self._written = []
+        self._area = context.area
+
+        wm = context.window_manager
+        wm.progress_begin(0, len(self._frames))
+        self._timer = wm.event_timer_add(0.01, window=context.window)
+        wm.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if event.type == "ESC":
+            self._cleanup(context)
+            self.report(
+                {"WARNING"},
+                f"Cancelled after {len(self._written)} frame(s); "
+                f"PNGs kept in {self._out_dir}",
+            )
+            return {"CANCELLED"}
+
+        if event.type != "TIMER":
+            return {"RUNNING_MODAL"}
+
+        if self._index >= len(self._frames):
+            return self._complete(context)
+
+        frame = self._frames[self._index]
+        if not self._render_frame(context, frame):
+            self._cleanup(context)
+            return {"CANCELLED"}
+
+        self._index += 1
+        context.window_manager.progress_update(self._index)
+        if self._area is not None:
+            self._area.header_text_set(
+                f"Rendering RDM frame {self._index}/{len(self._frames)} "
+                "(Esc to cancel)"
+            )
+        return {"RUNNING_MODAL"}
+
+    def _render_frame(self, context, frame: int) -> bool:
+        scene = context.scene
+        settings = scene.radar_settings
+        scene.frame_set(frame)
+        try:
+            result = compute_scene_rdm(context, settings)
+        except ValueError as exc:
+            self.report({"ERROR"}, f"Invalid radar configuration: {exc}")
+            return False
+        path = os.path.join(self._out_dir, frame_filename(frame))
+        try:
+            save_image_png(result.image, path)
+        except (RuntimeError, OSError) as exc:
+            self.report({"ERROR"}, f"Failed to write {path}: {exc}")
+            return False
+        self._written.append(path)
+        return True
+
+    def _complete(self, context):
+        count = len(self._written)
+        self._cleanup(context)
+        self.report(
+            {"INFO"},
+            f"Rendered {count} RDM frame(s) to {self._out_dir}",
+        )
+        return {"FINISHED"}
+
+    def _cleanup(self, context):
+        wm = context.window_manager
+        if self._timer is not None:
+            wm.event_timer_remove(self._timer)
+            self._timer = None
+        wm.progress_end()
+        context.scene.frame_set(self._orig_frame)
+        if self._area is not None:
+            self._area.header_text_set(None)
+
+
+_classes = (
+    RADAR_OT_extract_scatter_points,
+    RADAR_OT_compute_rdm,
+    RADAR_OT_view_rdm,
+    RADAR_OT_render_animation,
+)
 
 
 def register():
