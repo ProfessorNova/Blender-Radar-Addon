@@ -1,16 +1,38 @@
 # Blender Radar Addon
 
-A Blender add-on that simulates radar Range-Doppler maps from a scene using
-raytracing.
+A Blender add-on that simulates a radar from a scene using raytracing and
+produces radar maps from the resulting signal.
+
+## Concept: the radar data cube
+
+The central object of the simulation is the **radar data cube**, not a single
+map. From the raw signal a series of FFTs yields a volume with up to three
+axes — **range**, **Doppler** (radial velocity) and **angle** (direction of
+arrival). The familiar radar maps are all 2D views into this one cube:
+
+| Map | Axes | View into the cube |
+|-----|------|--------------------|
+| **Range-Doppler** (RDM) | range × Doppler | one channel, or summed over channels |
+| **Range-Angle** (RAM) | range × angle | one Doppler slice / integrated over Doppler |
+| **Angle-Doppler** (ADM) | angle × Doppler | one range slice / integrated over range |
+
+The angle axis only exists once an antenna **array** is modelled (milestone 5).
+Until then the cube collapses to its range × Doppler face, so the only view the
+add-on can produce is the Range-Doppler map — which is exactly what milestones
+1-3 deliver. Concretely the array case is a stack of RDMs across the antenna
+channels, with an extra angle FFT across that stack; RAM and ADM are then
+slices of the resulting 3D cube.
 
 ## Status
 
 Milestones 1-3 complete. On top of the raytracing, the add-on synthesizes an
 FMCW beat signal from the scatter points and produces a Range-Doppler map (RDM)
-via a 2D FFT, written to a Blender image data-block. The detection-volume
-overlay, the in-panel RDM preview and the Image-Editor viewing all work, and a
-modal renderer turns the whole scene frame range into a PNG image sequence.
-See the roadmap below for the full plan.
+via a 2D FFT, written to a Blender image data-block. This is the single-channel
+case of the data cube above; the angle axis (and the RAM/ADM views) arrive with
+the antenna array in milestone 5. The detection-volume overlay, the in-panel RDM
+preview and the Image-Editor viewing all work, and a modal renderer turns the
+whole scene frame range into a PNG image sequence. See the roadmap below for the
+full plan.
 
 ## Requirements
 
@@ -245,6 +267,12 @@ Note: keep the ray-fan **Max Range** at or below the waveform's unambiguous
 **Max range** shown in the panel, otherwise distant hits alias into lower
 range bins.
 
+Cube perspective: the `(chirps, samples)` beat cube and its 2D FFT are the
+single-channel, range × Doppler face of the radar data cube described at the
+top. There is no angle axis yet because there is only one antenna. Milestone 5
+adds a channel dimension, which turns this 2D cube into a 3D one and makes the
+RDM one of three views (alongside RAM and ADM).
+
 ### Milestone 3 - Visualization and animation
 
 Goal: make the radar easy to set up and inspect, and extend the single-frame
@@ -311,6 +339,25 @@ Goal: extend the model by the spatial dimension.
 Acceptance: correct angle estimation for a target with a known angle of
 arrival.
 
+Rethinking required here: this is where the project stops being "Range-Doppler
+only" and the radar data cube grows its third axis. Concretely:
+
+- The beat cube gains a channel dimension: `(chirps, samples)` becomes
+  `(channels, chirps, samples)`. `core/signal_model.py` must synthesize one
+  beat signal per antenna, applying the per-channel phase that encodes the
+  angle of arrival.
+- An angle FFT (or beamforming) across the channel axis produces the third
+  axis. The natural shape is to compute one RDM per channel and stack them,
+  then transform across the stack — i.e. the array case literally *is* a stack
+  of RDMs plus an angle transform.
+- RDM, RAM and ADM then become three slices/projections of the same 3D cube,
+  so the single-purpose `core/range_doppler.py` should be generalised (e.g. a
+  `core/radar_cube.py` that owns the 3D transform, with `to_rdm` / `to_ram` /
+  `to_adm` slicing helpers). The current 2D path stays valid as the
+  single-channel special case.
+- The UI and `utils/rdm.py` move from "compute *the* RDM" to "compute the cube,
+  then pick a view to display".
+
 ### Milestone 6 - Detection and micro-Doppler
 
 Goal: advanced evaluations that double as assessment tools for the later
@@ -321,6 +368,12 @@ attack.
 
 Acceptance: extracted detections from the RDM and a recognizable micro-Doppler
 pattern for a rotating or vibrating structure.
+
+Cube note: CFAR is described here on the RDM, but once milestone 5 exists it
+naturally runs on the full range × Doppler × angle cube, yielding detections
+with an angle estimate instead of range/Doppler only. Keep the detector written
+against a cube view so the same code serves the 2D (single-channel) and 3D
+cases.
 
 ### Milestone 7 - Adversarial module and physical plausibilization
 
@@ -337,6 +390,13 @@ the quantified discrepancy from the ideally optimized digital perturbation.
 
 Note: this milestone deliberately ends at simulation and physical
 plausibilization, not at a real transmit instruction.
+
+Cube note: the perturbation interface is phrased in the RD domain because that
+is the only view that exists before milestone 5. With an array present the
+adversarial target is more generally a perturbation of the full data cube (it
+can specify an angle, not just range and Doppler); keep the interface able to
+take a cube-domain target so the back-projection can place scatter centres in
+angle as well.
 
 ### Milestone 8 - Evaluation and robustness analysis
 
