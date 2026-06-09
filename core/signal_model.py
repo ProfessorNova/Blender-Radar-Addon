@@ -131,6 +131,25 @@ class RadarConfig:
         return self.wavelength / (4.0 * self.chirp_period)
 
 
+def reflectivity_to_rcs(reflectivity, low: float = 1.0, high: float = 100.0):
+    """Map a surface reflectivity in ``[0, 1]`` to a relative RCS factor.
+
+    The reflectivity is the material's metallic value: metal reflects radar
+    strongly, dielectrics (cloth, skin, plastic) weakly. The mapping is linear,
+    ``0 -> low`` and ``1 -> high``, and the input is clamped to ``[0, 1]``.
+
+    Args:
+        reflectivity: Reflectivity value(s) in ``[0, 1]`` (array-like).
+        low: RCS factor for a non-metallic surface.
+        high: RCS factor for a fully metallic surface.
+
+    Returns:
+        ``numpy.ndarray`` of relative RCS factors.
+    """
+    r = np.clip(np.asarray(reflectivity, dtype=np.float64), 0.0, 1.0)
+    return low + (high - low) * r
+
+
 def radar_equation_amplitude(
     ranges,
     rcs=1.0,

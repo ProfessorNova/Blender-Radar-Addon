@@ -12,6 +12,7 @@ from core.signal_model import (
     SPEED_OF_LIGHT,
     RadarConfig,
     radar_equation_amplitude,
+    reflectivity_to_rcs,
     synthesize_beat_cube,
 )
 
@@ -67,6 +68,20 @@ def test_radar_equation_inverse_square_voltage():
 def test_radar_equation_scales_with_sqrt_rcs():
     amp = radar_equation_amplitude([10.0, 10.0], rcs=[1.0, 4.0])
     assert math.isclose(amp[1] / amp[0], 2.0)
+
+
+# --- reflectivity_to_rcs ----------------------------------------------------
+
+
+def test_reflectivity_to_rcs_endpoints_and_clamp():
+    # 0 -> low, 1 -> high, linear in between, clamped outside [0, 1].
+    rcs = reflectivity_to_rcs([0.0, 1.0, 0.5], low=1.0, high=100.0)
+    assert math.isclose(rcs[0], 1.0)
+    assert math.isclose(rcs[1], 100.0)
+    assert math.isclose(rcs[2], 50.5)
+    clamped = reflectivity_to_rcs([-1.0, 2.0], low=1.0, high=100.0)
+    assert math.isclose(clamped[0], 1.0)
+    assert math.isclose(clamped[1], 100.0)
 
 
 # --- synthesize_beat_cube ---------------------------------------------------

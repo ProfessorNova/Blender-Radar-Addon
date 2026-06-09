@@ -25,14 +25,16 @@ slices of the resulting 3D cube.
 
 ## Status
 
-Milestones 1-3 complete. On top of the raytracing, the add-on synthesizes an
+Milestones 1-4 complete. On top of the raytracing, the add-on synthesizes an
 FMCW beat signal from the scatter points and produces a Range-Doppler map (RDM)
 via a 2D FFT, written to a Blender image data-block. This is the single-channel
 case of the data cube above; the angle axis (and the RAM/ADM views) arrive with
 the antenna array in milestone 5. The detection-volume overlay, the in-panel RDM
 preview and the Image-Editor viewing all work, and a modal renderer turns the
-whole scene frame range into a PNG image sequence. See the roadmap below for the
-full plan.
+whole scene frame range into a PNG image sequence. An optional thermal-noise and
+clutter model feeds the signal chain, and the current frame can be exported as a
+reproducible `.npz` dataset (data cube, RDM and ground truth) that loads outside
+Blender. See the roadmap below for the full plan.
 
 ## Requirements
 
@@ -156,12 +158,16 @@ Python pipeline. Tests run without Blender:
             signal_model.py      #   FMCW config and beat-cube synthesis (MS2)
             range_doppler.py     #   2D FFT, RDM, range axis, peak finder (MS2)
             doppler.py           #   Doppler/velocity conversions, axis (MS2)
+            noise.py             #   thermal noise and clutter model (MS4)
+            export.py            #   CARRADA-style RD dataset writer (MS4)
+            colormap.py          #   NumPy plasma LUT for RDM display
         utils/                   # scene access and Blender-side bridges
             scene_access.py      #   scene.ray_cast wrapper, motion sampling
             rdm.py               #   scene -> RDM -> image bridge (MS2)
             preview.py           #   in-panel RDM preview collection (MS3)
             overlay.py           #   viewport detection-volume overlay (MS3)
             animation.py         #   per-frame PNG-sequence save (MS3)
+            export.py            #   RDMResult -> dataset metadata bridge (MS4)
         tests/                   # tests for the Blender-independent core
 
 ## Roadmap
@@ -174,8 +180,8 @@ previous one and yields a testable state.
 | 0 | Skeleton and toolchain | Runnable, empty add-on (done) |
 | 1 | Scene access and raytracing | Scatter points with range and radial velocity (done) |
 | 2 | Signal model and first RDM | Plausible Range-Doppler map (done) |
-| 3 | Visualization and animation | Overlay, in-panel/Image-Editor viewing, RDM image sequence |
-| 4 | Configuration, noise and export | Reproducible dataset with ground truth |
+| 3 | Visualization and animation | Overlay, in-panel/Image-Editor viewing, RDM image sequence (done) |
+| 4 | Configuration, noise and export | Reproducible dataset with ground truth (done) |
 | 5 | Antenna array and angle information | Correct angle estimation, ADM and RAM |
 | 6 | Detection and micro-Doppler | CFAR detections and micro-Doppler spectrogram |
 | 7 | Adversarial module and plausibilization | Physically back-projected perturbation |
@@ -260,12 +266,29 @@ The Blender bridge lives in `utils/rdm.py`. In the viewport N-panel, set the
 unambiguous spans live) and press **Compute Range-Doppler Map**. The RDM is
 written to an image data-block named `RadarRDM` (range on the vertical axis,
 velocity / Doppler on the horizontal axis, magnitude in dB normalised over an
-80 dB dynamic range). The operator reports the strongest target's range and
-velocity. The richer in-panel and Image-Editor viewing is part of milestone 3.
+80 dB dynamic range and coloured with a plasma colormap, dark blue = weak to
+yellow = strong). The colormap is an embedded NumPy lookup table in
+`core/colormap.py` (no matplotlib dependency). The operator reports the
+strongest target's range and velocity. The richer in-panel and Image-Editor
+viewing is part of milestone 3.
 
 Note: keep the ray-fan **Max Range** at or below the waveform's unambiguous
 **Max range** shown in the panel, otherwise distant hits alias into lower
 range bins.
+
+Default parameters (Carradar): the shipped defaults follow the Carradar
+reference radar — 77 GHz carrier, 64 chirps, 256 samples per chirp, a 72.5 µs
+chirp period (giving ±13.43 m/s unambiguous velocity at 0.42 m/s resolution),
+180° azimuth FOV, a 50 m max range and a 0.20 m range resolution (so the RDM
+image is a manageable 64 × 256). One value is adjusted because the reference
+table is over-specified for this simplified complex-sampling model, where
+bandwidth and sample count jointly fix both range resolution and unambiguous
+range: 256 samples reaching 50 m pin the **bandwidth to ~767.5 MHz**, not the
+table's 4 GHz (4 GHz at 256 samples would reach only 9.6 m, and forcing both
+4 GHz and 50 m would need 1334 samples and a lopsided 64 × 1334 image). The
+table's 0.70° "FFT angle resolution" is an antenna-array quantity with no
+equivalent until milestone 5; the 256 azimuth rays only mirror its angular
+sampling density over the 180° FOV.
 
 Cube perspective: the `(chirps, samples)` beat cube and its 2D FFT are the
 single-channel, range × Doppler face of the radar data cube described at the
@@ -281,7 +304,9 @@ RDM to whole animations.
 - [x] Detection-volume viewport overlay (`utils/overlay.py`): a wireframe
       frustum (corner rays, boresight, the rectangle at max range and a
       cross-hair), like a spotlight's cone, showing the field of view and range
-      while posing the radar object
+      while posing the radar object, plus an "up" triangle on the top edge that
+      points along the radar's local up axis (and rolls with it), mirroring
+      Blender's camera triangle
 - [x] In-panel RDM preview (`utils/preview.py`): panels cannot draw a raw
       image, so a preview collection is rebuilt from the RDM pixels and drawn
       with `template_icon`, making the result visible in the sidebar
@@ -319,13 +344,80 @@ milestone 4.
 
 Goal: make the results usable for downstream work.
 
-- [ ] Configurable radar parameters via `PropertyGroup` (`properties/radar_settings.py`)
-- [ ] Noise model with thermal noise and optional clutter
-- [ ] Export data cube and RDM (`.npy` or HDF5) (`core/export.py`)
-- [ ] Ground-truth export of object positions and velocities
+- [x] Configurable radar parameters via `PropertyGroup` (`properties/__init__.py`)
+- [x] Noise model with thermal noise and optional clutter (`core/noise.py`)
+- [x] Material-driven RCS: the surface metallic value scales the backscatter
+- [x] Export the range-Doppler maps of a sequence as a CARRADA-style dataset
+      (`core/export.py`)
+- [ ] Range-angle / angle-Doppler maps and dense class annotations (need the
+      antenna array, milestone 5)
 
-Acceptance: a reproducible dataset of RDM and matching ground truth, loadable
-outside Blender. The base is complete at this point.
+Acceptance: a reproducible range-Doppler dataset whose value range and look
+resemble the reference, loadable outside Blender. The base is complete at this
+point; the angle maps and dense annotations land with milestone 5.
+
+The noise and clutter model lives in the bpy-independent `core/noise.py`.
+Thermal noise is additive white circularly-symmetric complex Gaussian noise on
+the beat cube (RMS voltage `noise_std`); clutter is a set of stationary
+scatterers at random ranges, synthesized through the same
+`synthesize_beat_cube` as real targets and therefore landing in the
+zero-velocity column of the map. Both are driven by a single `Seed`, combined
+with the frame number in `utils/rdm.py` so a frame is reproducible from the
+seed while animation frames still get independent noise. Both default to on so
+the RDM has a noise floor and a static-clutter ridge like the reference data;
+the **Noise & Clutter** panel section toggles each effect and exposes its
+strength.
+
+The export targets the layout of the [CARRADA](https://arthurouaknine.github.io/codeanddata/carrada)
+dataset so the output is drop-in compatible with tooling built for it. The
+bpy-independent `core/export.py` owns the file format; **Export Dataset**
+(the modal `RADAR_OT_export_dataset`) renders `frame_start`..`frame_end` and
+fills the export folder:
+
+    <export folder>/
+        range_doppler_processed/000000.npy   # (n_range, n_doppler) float64
+        range_doppler_processed/000001.npy
+        ...
+        metadata.json                        # config, noise, frame map
+
+Each map is `20*log10|rdm|` plus a configurable **dB Offset** (default 47) so the
+values land in the reference range (~45..105 dB); the map is transposed to the
+reference `[range, doppler]` orientation and its Doppler axis is flipped to the
+CARRADA convention, where an approaching target sits to the right of the
+zero-velocity ridge (our FFT puts a receding target there). The same flip is
+applied to the displayed image, so the panel reads "right = approaching". The
+operator shows a progress bar and cancels on **Esc**, keeping the frames written
+so far.
+
+Radar cross-section is driven by the hit surface's **material metallic value**:
+metal reflects radar strongly, dielectrics (cloth, skin, plastic) weakly.
+`utils/scene_access.py` reads the Principled BSDF `Metallic` of the material on
+the hit face (cached per material) into each `RayHit`, and
+`core.signal_model.reflectivity_to_rcs` maps it linearly to a relative RCS
+(metallic 0 -> 1, metallic 1 -> 100) which, together with the incidence-angle
+factor, scales the target amplitude. So a car with a metallic material clearly
+outshines the noise and clutter floor while a default (non-metallic) material
+stays weak — set a material's *Metallic* to make an object a strong reflector.
+
+Look and value range: noise and clutter default to on, with the clutter point
+count (default 512) set high enough to fill most range bins so the
+zero-velocity clutter ridge is continuous like the reference instead of a row of
+dots, and a **Clutter Falloff** (default `1`, i.e. `1/R`) fading the ridge from
+bright near to dim far like real ground clutter. The **FFT Window** is the main
+look control and defaults to `None` (rectangular): it gives sharp, thin peaks
+(a one-bin Doppler ridge instead of the wide, blurry Hann lobe) and strong sinc
+sidelobes — the "sparks" radiating in range and Doppler in real data;
+`Hann`/`Blackman` suppress both. Finally **Display Range** (default 90 dB) sets
+the dynamic range of the *visualisation* only (map peak-minus-this..peak); a
+smaller value compresses the floor and brightens the noise background, a larger
+value darkens it. None of these touch the exported `.npy` values, which stay
+`20*log10|rdm|` + dB offset.
+
+Note: `core/range_doppler.py`, not a separate `radar_settings.py`, owns the FFT;
+the configurable parameters live in the scene `PropertyGroup` in
+`properties/__init__.py` (the project-structure sketch above lists the
+conceptual `radar_settings.py` location, but the add-on keeps the group in the
+package `__init__` as the earlier milestones did).
 
 ### Milestone 5 - Antenna array and angle information
 

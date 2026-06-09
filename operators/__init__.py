@@ -7,7 +7,10 @@ and radial velocity) for the current frame. Milestone 2 implements
 scatter points and writes it to a Blender image. Milestone 3 adds
 :class:`RADAR_OT_view_rdm` and the modal
 :class:`RADAR_OT_render_animation`, which renders an RDM per frame across the
-scene frame range with a progress bar and optional movie encoding.
+scene frame range with a progress bar and optional movie encoding. Milestone 4
+adds the modal :class:`RADAR_OT_export_dataset`, which renders the frame range
+into a CARRADA-style range-Doppler dataset (one ``.npy`` per frame plus a
+``metadata.json``) on disk.
 """
 
 import os
@@ -15,7 +18,9 @@ import os
 import bpy
 from bpy.types import Operator
 
+from ..core.export import RD_SUBDIR
 from ..utils.animation import frame_filename, save_image_png
+from ..utils.export import save_scene_rd_frame, write_dataset_metadata
 from ..utils.rdm import (
     RDM_IMAGE_NAME,
     build_radar_config,
@@ -306,11 +311,152 @@ class RADAR_OT_render_animation(Operator):
             self._area.header_text_set(None)
 
 
+class RADAR_OT_export_dataset(Operator):
+    """Render the frame range into a CARRADA-style range-Doppler dataset."""
+
+    bl_idname = "radar.export_dataset"
+    bl_label = "Export Dataset"
+    bl_description = (
+        "Render the scene frame range and write a CARRADA-style range-Doppler "
+        "dataset (one .npy per frame plus metadata.json) to the export folder. "
+        "Press Esc to cancel"
+    )
+    bl_options = {"REGISTER"}
+
+    _timer = None
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene.radar_settings.radar_object is not None
+
+    def invoke(self, context, event):
+        scene = context.scene
+        settings = scene.radar_settings
+
+        # Fail fast on an inconsistent waveform before touching the timeline.
+        try:
+            self._config = build_radar_config(settings)
+        except ValueError as exc:
+            self.report({"ERROR"}, f"Invalid radar configuration: {exc}")
+            return {"CANCELLED"}
+
+        out_dir = bpy.path.abspath(settings.export_dir)
+        if not out_dir or not os.path.isabs(out_dir):
+            self.report(
+                {"ERROR"},
+                "Save the .blend file or set an absolute export folder first",
+            )
+            return {"CANCELLED"}
+        try:
+            os.makedirs(os.path.join(out_dir, RD_SUBDIR), exist_ok=True)
+        except OSError as exc:
+            self.report({"ERROR"}, f"Cannot create export folder: {exc}")
+            return {"CANCELLED"}
+
+        step = max(scene.frame_step, 1)
+        self._frames = list(range(scene.frame_start, scene.frame_end + 1, step))
+        if not self._frames:
+            self.report({"WARNING"}, "Empty frame range")
+            return {"CANCELLED"}
+
+        self._out_dir = out_dir
+        self._index = 0
+        self._orig_frame = scene.frame_current
+        self._frame_map = {}
+        self._area = context.area
+
+        wm = context.window_manager
+        wm.progress_begin(0, len(self._frames))
+        self._timer = wm.event_timer_add(0.01, window=context.window)
+        wm.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if event.type == "ESC":
+            self._write_metadata(context)
+            self._cleanup(context)
+            self.report(
+                {"WARNING"},
+                f"Cancelled after {len(self._frame_map)} frame(s); "
+                f"dataset kept in {self._out_dir}",
+            )
+            return {"CANCELLED"}
+
+        if event.type != "TIMER":
+            return {"RUNNING_MODAL"}
+
+        if self._index >= len(self._frames):
+            return self._complete(context)
+
+        frame = self._frames[self._index]
+        if not self._export_frame(context, frame):
+            self._cleanup(context)
+            return {"CANCELLED"}
+
+        self._index += 1
+        context.window_manager.progress_update(self._index)
+        if self._area is not None:
+            self._area.header_text_set(
+                f"Exporting RD frame {self._index}/{len(self._frames)} "
+                "(Esc to cancel)"
+            )
+        return {"RUNNING_MODAL"}
+
+    def _export_frame(self, context, frame: int) -> bool:
+        scene = context.scene
+        settings = scene.radar_settings
+        scene.frame_set(frame)
+        try:
+            result = compute_scene_rdm(context, settings)
+        except ValueError as exc:
+            self.report({"ERROR"}, f"Invalid radar configuration: {exc}")
+            return False
+        try:
+            save_scene_rd_frame(
+                self._out_dir, self._index, result, settings.export_db_offset
+            )
+        except (OSError, ValueError) as exc:
+            self.report({"ERROR"}, f"Failed to write frame {self._index}: {exc}")
+            return False
+        self._frame_map[f"{self._index:06d}"] = frame
+        return True
+
+    def _write_metadata(self, context):
+        settings = context.scene.radar_settings
+        try:
+            write_dataset_metadata(
+                self._out_dir, settings, self._config, self._frame_map
+            )
+        except OSError as exc:
+            self.report({"WARNING"}, f"Could not write metadata.json: {exc}")
+
+    def _complete(self, context):
+        self._write_metadata(context)
+        count = len(self._frame_map)
+        self._cleanup(context)
+        self.report(
+            {"INFO"},
+            f"Exported {count} RD frame(s) to {self._out_dir}",
+        )
+        return {"FINISHED"}
+
+    def _cleanup(self, context):
+        wm = context.window_manager
+        if self._timer is not None:
+            wm.event_timer_remove(self._timer)
+            self._timer = None
+        wm.progress_end()
+        context.scene.frame_set(self._orig_frame)
+        if self._area is not None:
+            self._area.header_text_set(None)
+
+
 _classes = (
     RADAR_OT_extract_scatter_points,
     RADAR_OT_compute_rdm,
     RADAR_OT_view_rdm,
     RADAR_OT_render_animation,
+    RADAR_OT_export_dataset,
 )
 
 

@@ -48,18 +48,57 @@ def get_radar_pose(radar_obj) -> RadarPose:
     return RadarPose(origin=origin, forward=forward, right=right, up=up)
 
 
+def _material_metallic(mat) -> float:
+    """Return a material's metallic value in ``[0, 1]``.
+
+    Prefers the Principled BSDF ``Metallic`` input, falling back to the
+    material's viewport ``metallic`` attribute. Returns 0.0 when neither is
+    available (a non-metallic, weakly reflecting surface).
+    """
+    if mat is None:
+        return 0.0
+    node_tree = getattr(mat, "node_tree", None)
+    if getattr(mat, "use_nodes", False) and node_tree is not None:
+        for node in node_tree.nodes:
+            if node.type == "BSDF_PRINCIPLED":
+                inp = node.inputs.get("Metallic")
+                if inp is not None:
+                    return float(inp.default_value)
+    return float(getattr(mat, "metallic", 0.0))
+
+
+def _hit_metallic(obj, face_index: int, cache: dict) -> float:
+    """Metallic value of the material on the hit face of ``obj``.
+
+    Results are cached per material so the per-ray lookup stays cheap.
+    """
+    if obj is None or getattr(obj, "type", None) != "MESH" or not obj.material_slots:
+        return 0.0
+    try:
+        slot_index = obj.data.polygons[face_index].material_index
+        mat = obj.material_slots[slot_index].material
+    except (IndexError, AttributeError):
+        mat = obj.material_slots[0].material
+    key = mat.name if mat is not None else None
+    if key not in cache:
+        cache[key] = _material_metallic(mat)
+    return cache[key]
+
+
 def make_ray_caster(scene, depsgraph, max_range: Optional[float] = None):
     """Return a callable wrapping ``scene.ray_cast`` for the core.
 
     The callable takes world-space origin and direction numpy arrays and
-    returns a :class:`RayHit` or ``None``.
+    returns a :class:`RayHit` or ``None``. The hit carries the material's
+    metallic value as its reflectivity so the signal model can scale the RCS.
     """
     from mathutils import Vector
 
     distance = max_range if max_range is not None else 1.70141e38
+    metallic_cache: dict = {}
 
     def ray_cast(origin: np.ndarray, direction: np.ndarray) -> Optional[RayHit]:
-        result, location, normal, _index, obj, _matrix = scene.ray_cast(
+        result, location, normal, index, obj, _matrix = scene.ray_cast(
             depsgraph,
             Vector(origin.tolist()),
             Vector(direction.tolist()),
@@ -71,6 +110,7 @@ def make_ray_caster(scene, depsgraph, max_range: Optional[float] = None):
             location=np.array(location, dtype=np.float64),
             normal=np.array(normal, dtype=np.float64),
             object_name=obj.name if obj is not None else "",
+            reflectivity=_hit_metallic(obj, index, metallic_cache),
         )
 
     return ray_cast

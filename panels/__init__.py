@@ -4,6 +4,7 @@ The main panel lives in the 3D viewport N-panel under a "Radar" tab. From
 milestone 1 it exposes the radar object and the ray fan settings and a button
 to extract scatter points for the current frame. Milestone 2 adds the FMCW
 signal-model section, the derived resolutions and the Range-Doppler button.
+Milestone 4 adds the noise/clutter section and the dataset export section.
 """
 
 import bpy
@@ -47,8 +48,11 @@ class RADAR_PT_main(Panel):
         box.prop(settings, "n_chirps")
         box.prop(settings, "chirp_period_us")
         box.prop(settings, "rdm_window")
+        box.prop(settings, "rdm_dynamic_range_db")
 
         self._draw_derived(box, settings)
+
+        self._draw_noise(layout, settings)
 
         layout.separator()
         layout.operator("radar.extract_scatter_points", icon="TRACKER")
@@ -56,6 +60,36 @@ class RADAR_PT_main(Panel):
 
         self._draw_rdm_preview(layout, settings)
         self._draw_animation(layout, context, settings)
+        self._draw_export(layout, settings)
+
+    @staticmethod
+    def _draw_noise(layout, settings):
+        """Thermal-noise and clutter model (milestone 4)."""
+        box = layout.box()
+        box.label(text="Noise & Clutter")
+
+        box.prop(settings, "noise_enabled")
+        col = box.column(align=True)
+        col.enabled = settings.noise_enabled
+        col.prop(settings, "noise_std")
+
+        box.prop(settings, "clutter_enabled")
+        col = box.column(align=True)
+        col.enabled = settings.clutter_enabled
+        col.prop(settings, "clutter_count")
+        col.prop(settings, "clutter_std")
+        col.prop(settings, "clutter_falloff")
+
+        box.prop(settings, "noise_seed")
+
+    @staticmethod
+    def _draw_export(layout, settings):
+        """CARRADA-style range-Doppler dataset export (milestone 4)."""
+        box = layout.box()
+        box.label(text="Export")
+        box.prop(settings, "export_dir")
+        box.prop(settings, "export_db_offset")
+        box.operator("radar.export_dataset", icon="EXPORT")
 
     @staticmethod
     def _draw_animation(layout, context, settings):
@@ -86,7 +120,7 @@ class RADAR_PT_main(Panel):
             row.alignment = "CENTER"
             row.template_icon(icon_value=icon, scale=12.0)
             box.label(text="y: range (up = far)")
-            box.label(text="x: velocity (right = receding)")
+            box.label(text="x: velocity (right = approaching)")
 
         # Native image data-block widget (browse / rename / unlink) plus a
         # button to open the map in a full Image Editor.

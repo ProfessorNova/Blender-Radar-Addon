@@ -17,10 +17,13 @@ from dataclasses import dataclass
 import bpy
 import numpy as np
 
+from ..core.colormap import apply_colormap
+from ..core.noise import clutter_targets, thermal_noise
 from ..core.range_doppler import find_peak, magnitude_db, range_doppler_map
 from ..core.signal_model import (
     RadarConfig,
     radar_equation_amplitude,
+    reflectivity_to_rcs,
     synthesize_beat_cube,
 )
 from .preview import update_rdm_preview
@@ -29,9 +32,9 @@ from .scene_access import extract_scene_scatter_points
 # Name of the image data-block the RDM is written to.
 RDM_IMAGE_NAME = "RadarRDM"
 
-# Displayed dynamic range below the peak, in dB. Cells weaker than this are
-# clamped to black.
-RDM_DYNAMIC_RANGE_DB = 80.0
+# Default displayed dynamic range below the peak, in dB. Cells weaker than this
+# are clamped to black. Overridden per scene by ``rdm_dynamic_range_db``.
+RDM_DYNAMIC_RANGE_DB = 90.0
 
 
 def build_radar_config(settings) -> RadarConfig:
@@ -60,6 +63,10 @@ class RDMResult:
     peak_range: float
     peak_velocity: float
     image: object  # bpy.types.Image
+    cube: np.ndarray  # complex (n_chirps, n_samples) beat cube (with noise)
+    rdm: np.ndarray  # complex (n_chirps, n_samples) Range-Doppler map
+    points: list  # core.raytracing.ScatterPoint, the ground-truth returns
+    config: RadarConfig  # the waveform config used (for export metadata)
 
 
 def _targets_from_points(points, radar_origin: np.ndarray):
@@ -67,13 +74,16 @@ def _targets_from_points(points, radar_origin: np.ndarray):
 
     The amplitude follows the radar equation (voltage ~ 1/R**2) modulated by
     the cosine of the local incidence angle as a simple radar-cross-section
-    proxy: surfaces facing the radar reflect more strongly than grazing ones.
+    proxy (surfaces facing the radar reflect more strongly than grazing ones)
+    and by the surface reflectivity from the material's metallic value, so a
+    metallic object outshines a dielectric one.
     """
     ranges = np.array([p.range for p in points], dtype=np.float64)
     velocities = np.array([p.radial_velocity for p in points], dtype=np.float64)
 
     positions = np.array([p.position for p in points], dtype=np.float64)
     normals = np.array([p.normal for p in points], dtype=np.float64)
+    reflectivity = np.array([p.reflectivity for p in points], dtype=np.float64)
 
     los = positions - radar_origin
     los_norm = np.linalg.norm(los, axis=1, keepdims=True)
@@ -86,19 +96,26 @@ def _targets_from_points(points, radar_origin: np.ndarray):
 
     # Incidence factor in [floor, 1]; a small floor keeps grazing hits visible.
     incidence = np.abs(np.sum(normal_unit * los_unit, axis=1))
-    rcs = np.maximum(incidence, 0.05)
+    rcs = np.maximum(incidence, 0.05) * reflectivity_to_rcs(reflectivity)
 
     amplitudes = radar_equation_amplitude(ranges, rcs=rcs).astype(np.complex128)
     return ranges, velocities, amplitudes
 
 
+# Colormap applied to the normalised magnitude map for display.
+RDM_COLORMAP = "plasma"
+
+
 def _normalized_to_rgba(normalized: np.ndarray) -> np.ndarray:
-    """Expand a (height, width) array in [0, 1] to a grayscale RGBA buffer."""
+    """Map a (height, width) array in [0, 1] to a coloured RGBA buffer.
+
+    The magnitude is run through the perceptual ``RDM_COLORMAP`` (plasma) so
+    weak-to-strong returns read as dark-blue-to-yellow instead of grayscale.
+    """
+    rgb = apply_colormap(normalized, RDM_COLORMAP)
     height, width = normalized.shape
     rgba = np.empty((height, width, 4), dtype=np.float32)
-    rgba[..., 0] = normalized
-    rgba[..., 1] = normalized
-    rgba[..., 2] = normalized
+    rgba[..., :3] = rgb
     rgba[..., 3] = 1.0
     return rgba
 
@@ -128,12 +145,45 @@ def _write_rdm_image(name: str, rgba: np.ndarray):
     return image
 
 
-def _normalize_db(mag_db: np.ndarray) -> np.ndarray:
-    """Map a dB magnitude map to [0, 1] over RDM_DYNAMIC_RANGE_DB below peak."""
+def _normalize_db(
+    mag_db: np.ndarray, dynamic_range_db: float = RDM_DYNAMIC_RANGE_DB
+) -> np.ndarray:
+    """Map a dB magnitude map to [0, 1] over ``dynamic_range_db`` below peak."""
+    dynamic_range_db = max(float(dynamic_range_db), 1e-6)
     peak = float(mag_db.max())
-    floor = peak - RDM_DYNAMIC_RANGE_DB
-    normalized = (mag_db - floor) / RDM_DYNAMIC_RANGE_DB
+    floor = peak - dynamic_range_db
+    normalized = (mag_db - floor) / dynamic_range_db
     return np.clip(normalized, 0.0, 1.0)
+
+
+def _apply_noise(cube, config, settings, frame: int):
+    """Add clutter and thermal noise to the beat cube if enabled.
+
+    The random generator is seeded from ``(noise_seed, frame)`` so a frame is
+    reproducible from the seed while different frames get independent noise.
+    Clutter is drawn first, then thermal noise, so the consumption order (and
+    thus the result) is fixed for a given seed.
+    """
+    if not (settings.noise_enabled or settings.clutter_enabled):
+        return cube
+
+    rng = np.random.default_rng([settings.noise_seed, int(frame)])
+    cube = cube.copy()
+
+    if settings.clutter_enabled and settings.clutter_count > 0:
+        c_ranges, c_vel, c_amp = clutter_targets(
+            settings.clutter_count,
+            max_range=config.max_range,
+            amplitude_std=settings.clutter_std,
+            rng=rng,
+            falloff_exp=settings.clutter_falloff,
+        )
+        cube += synthesize_beat_cube(config, c_ranges, c_vel, c_amp)
+
+    if settings.noise_enabled:
+        cube += thermal_noise(cube.shape, settings.noise_std, rng)
+
+    return cube
 
 
 def compute_scene_rdm(context, settings) -> RDMResult:
@@ -175,13 +225,16 @@ def compute_scene_rdm(context, settings) -> RDMResult:
     else:
         cube = np.zeros((config.n_chirps, config.n_samples), dtype=np.complex128)
 
+    cube = _apply_noise(cube, config, settings, context.scene.frame_current)
+
     rdm = range_doppler_map(cube, window=settings.rdm_window)
     mag_db = magnitude_db(rdm)
     peak_range, peak_velocity, _ = find_peak(rdm, config)
 
     # mag_db is indexed [doppler, range]; transpose to display range on the
-    # vertical axis and velocity (Doppler) on the horizontal axis.
-    display = _normalize_db(mag_db).T
+    # vertical axis and velocity (Doppler) on the horizontal axis, then flip the
+    # Doppler axis to the CARRADA convention (approaching target to the right).
+    display = _normalize_db(mag_db, settings.rdm_dynamic_range_db).T[:, ::-1]
     rgba = _normalized_to_rgba(np.ascontiguousarray(display))
     height, width = rgba.shape[:2]
     image = _write_rdm_image(RDM_IMAGE_NAME, rgba)
@@ -194,6 +247,10 @@ def compute_scene_rdm(context, settings) -> RDMResult:
         peak_range=peak_range,
         peak_velocity=peak_velocity,
         image=image,
+        cube=cube,
+        rdm=rdm,
+        points=points,
+        config=config,
     )
 
 

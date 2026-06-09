@@ -6,7 +6,10 @@ settings. The visualization shows:
 * four corner rays from the radar origin to the corners of the far face,
 * one centre boresight ray,
 * the rectangular outline at max_range,
-* a cross-hair on the far face.
+* a cross-hair on the far face,
+* an "up" triangle on the top edge of the far face, mirroring Blender's
+  camera triangle, so the radar's required up direction is obvious (and
+  visibly rolls with the object) while posing it.
 
 Uses the camera convention: local -Z is boresight, +Y is up, +X is right.
 """
@@ -48,6 +51,8 @@ def _draw() -> None:
 
     rot = radar_obj.matrix_world.to_3x3().normalized()
     origin = Vector(radar_obj.matrix_world.translation)
+    right_axis = (rot @ Vector((1.0, 0.0, 0.0))).normalized()
+    up_axis = (rot @ Vector((0.0, 1.0, 0.0))).normalized()
 
     def wp(az: float, el: float) -> Vector:
         return origin + rot @ _fov_direction(az, el) * max_range
@@ -81,6 +86,22 @@ def _draw() -> None:
 
     line(mids[0], mids[2])
     line(mids[1], mids[3])
+
+    # "Up" triangle: an isosceles triangle whose base sits on the top edge of
+    # the far face (centred at the top mid-point) and whose apex points along
+    # the radar's local up axis, like the triangle on a Blender camera. It is
+    # sized relative to max_range so it scales with the cone.
+    top_mid = mids[0]
+    tri_size = max_range * 0.12
+    base_half = tri_size * 0.6
+    top_edge = corners[0] - corners[3]
+    base_dir = top_edge.normalized() if top_edge.length > 0.0 else right_axis
+    base_left = top_mid - base_dir * base_half
+    base_right = top_mid + base_dir * base_half
+    apex = top_mid + up_axis * tri_size
+    line(base_left, base_right)
+    line(base_right, apex)
+    line(apex, base_left)
 
     shader = gpu.shader.from_builtin('UNIFORM_COLOR')
     batch = batch_for_shader(shader, 'LINES', {"pos": verts})

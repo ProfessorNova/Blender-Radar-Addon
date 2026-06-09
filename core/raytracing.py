@@ -70,11 +70,14 @@ class RayHit:
 
     ``location`` and ``normal`` are world-space vectors. ``object_name`` is
     used to look up the object's motion for the velocity computation.
+    ``reflectivity`` is a ``[0, 1]`` surface reflectivity (the material's
+    metallic value in Blender) used to scale the radar cross section.
     """
 
     location: np.ndarray
     normal: np.ndarray
     object_name: str
+    reflectivity: float = 0.0
 
 
 # A ray caster takes a world-space origin and direction and returns the hit
@@ -109,6 +112,8 @@ class ScatterPoint:
     normal: np.ndarray = field(
         default_factory=lambda: np.zeros(3, dtype=np.float64)
     )
+    # Surface reflectivity in [0, 1] (material metallic), scales the RCS.
+    reflectivity: float = 0.0
 
 
 def fan_directions(
@@ -322,6 +327,7 @@ def extract_scatter_points(
                 elevation=float(el),
                 object_name=hit.object_name,
                 normal=np.asarray(hit.normal, dtype=np.float64),
+                reflectivity=float(hit.reflectivity),
             )
         )
     return points
