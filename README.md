@@ -19,11 +19,40 @@ See the roadmap below for the full plan.
 
 ## Installation
 
-1. Package the repository as a ZIP (see Development) or use the provided
-   `radar_rdm_generator.zip`.
+The add-on is installed from a ZIP. Either grab a release ZIP or build one from
+the source (see [Building the ZIP](#building-the-zip) below).
+
+1. Get the ZIP: download a release, or build it with
+   `blender --command extension build` (see [Building the ZIP](#building-the-zip)).
 2. In Blender: Edit > Preferences > Get Extensions > Install from Disk.
 3. Select the ZIP and enable it.
 4. The panel appears in the 3D viewport under N-panel > "Radar" tab.
+
+### Building the ZIP
+
+This add-on uses the Blender extension format (4.2+), so the supported way to
+package it is Blender's own builder. Run it from the repository root — the
+command is **identical on Windows, macOS and Linux**:
+
+    blender --command extension build
+
+It reads `blender_manifest.toml`, honours the `[build]` exclude list there
+(so `.venv`, `.git`, `tests/`, `__pycache__`, `pyproject.toml` and friends are
+left out) and writes `radar_addon-0.1.0.zip` next to the manifest. This is the
+only method that guarantees a ZIP Blender will accept, so it is the recommended
+one.
+
+If `blender` is not on your `PATH`, call the executable directly:
+
+| OS | Command |
+|----|---------|
+| Windows | `& "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" --command extension build` |
+| macOS | `/Applications/Blender.app/Contents/MacOS/Blender --command extension build` |
+| Linux | `/opt/blender/blender --command extension build` |
+
+Adjust the path to match your local Blender install. Inside VS Code with the
+Blender Development extension, the command palette entry **Blender: Build and
+Install** does the same thing and installs in one step.
 
 ## Development
 
@@ -83,17 +112,6 @@ The extension launches Blender with `debugpy` attached. To hit a breakpoint:
 3. Trigger the code path in Blender (e.g. click *Compute Range-Doppler Map*
    in the N-panel under the **Radar** tab).
 4. VS Code pauses at the breakpoint with the full call stack and locals panel.
-
-**Packaging a ZIP (optional)**
-
-To create an installable `.zip` for distribution or manual installation:
-
-    # Windows PowerShell
-    Compress-Archive -Path .\* -DestinationPath radar_rdm_generator.zip `
-        -CompressionLevel Optimal
-
-Or use the command palette entry **Blender: Build and Install** which packages
-and installs in one step.
 
 ### Running tests without Blender
 
